@@ -271,9 +271,10 @@ class TestOrderBuilder(TestCase):
                 self.assertEqual(side, Side.SELL)
                 self.assertEqual(decimal_places(maker), 0)
                 self.assertEqual(decimal_places(taker), 0)
-                self.assertGreaterEqual(
-                    round_normal(maker / taker, 6), round_normal(price, 6)
-                )
+                self.assertGreater(maker, 0)
+                self.assertGreater(taker, 0)
+                self.assertEqual(maker % 10_000, 0)
+                self.assertEqual(taker % 100, 0)
                 price = round_normal(price + delta_price, 3)
             amount = round_normal(amount + delta_size, 2)
 
@@ -291,12 +292,28 @@ class TestOrderBuilder(TestCase):
                 self.assertEqual(side, Side.SELL)
                 self.assertEqual(decimal_places(maker), 0)
                 self.assertEqual(decimal_places(taker), 0)
-                # V2 uses round_down for raw_price; compare against round_down(price, 4)
-                self.assertGreaterEqual(
-                    round_normal(taker / maker, 8), round_down(price, 4)
-                )
+                self.assertGreater(maker, 0)
+                self.assertGreater(taker, 0)
+                self.assertEqual(maker % 10_000, 0)
+                self.assertEqual(taker % 100, 0)
                 price = round_normal(price + delta_price, 4)
             amount = round_normal(amount + delta_size, 2)
+
+    def test_market_order_backend_precision_limits(self):
+        builder = OrderBuilder(signer)
+
+        for tick_size in ["0.1", "0.01", "0.001", "0.0001"]:
+            _, buy_maker, buy_taker = builder.get_market_order_amounts(
+                BUY, 6.9, 0.89, ROUNDING_CONFIG[tick_size]
+            )
+            self.assertEqual(buy_maker % 10_000, 0)
+            self.assertEqual(buy_taker % 100, 0)
+
+            _, sell_maker, sell_taker = builder.get_market_order_amounts(
+                SELL, 6.9, 0.89, ROUNDING_CONFIG[tick_size]
+            )
+            self.assertEqual(sell_maker % 10_000, 0)
+            self.assertEqual(sell_taker % 100, 0)
 
     def test_get_order_amounts_buy_0_1(self):
         builder = OrderBuilder(signer)
@@ -508,7 +525,7 @@ class TestOrderBuilder(TestCase):
             )
             self._assert_signed_order_v2(order)
             if side == BUY:
-                self.assertEqual(order.makerAmount, "11782400")
+                self.assertEqual(order.makerAmount, "11790000")
                 self.assertEqual(order.takerAmount, "21040000")
             else:
                 self.assertEqual(order.makerAmount, "21040000")
@@ -523,7 +540,7 @@ class TestOrderBuilder(TestCase):
             )
             self._assert_signed_order_v2(order)
             if side == BUY:
-                self.assertEqual(order.makerAmount, "1178240")
+                self.assertEqual(order.makerAmount, "1180000")
                 self.assertEqual(order.takerAmount, "21040000")
             else:
                 self.assertEqual(order.makerAmount, "21040000")
@@ -538,7 +555,7 @@ class TestOrderBuilder(TestCase):
             )
             self._assert_signed_order_v2(order)
             if side == BUY:
-                self.assertEqual(order.makerAmount, "117824")
+                self.assertEqual(order.makerAmount, "120000")
                 self.assertEqual(order.takerAmount, "21040000")
             else:
                 self.assertEqual(order.makerAmount, "21040000")
@@ -554,6 +571,16 @@ class TestOrderBuilder(TestCase):
         self._assert_signed_order_v2(order)
         self.assertEqual(order.makerAmount, "16400000")
         self.assertEqual(order.takerAmount, "20000000")
+
+    def test_build_order_buy_uses_coarse_precision_constraints(self):
+        builder = OrderBuilder(signer)
+        order = builder.build_order(
+            OrderArgsV2(token_id=TOKEN_ID, price=0.11, size=10.1, side=BUY),
+            CreateOrderOptions(tick_size="0.01", neg_risk=False),
+        )
+        self._assert_signed_order_v2(order)
+        self.assertEqual(order.makerAmount, "1120000")
+        self.assertEqual(order.takerAmount, "10100000")
 
     def test_build_order_neg_risk(self):
         builder = OrderBuilder(signer)

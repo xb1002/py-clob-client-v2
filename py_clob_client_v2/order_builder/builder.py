@@ -40,6 +40,17 @@ ROUNDING_CONFIG: dict = {
     "0.0001": RoundConfig(price=4, size=2, amount=6),
 }
 
+_SIGNER_WARM_UP_HASH = b"\x00" * 32
+
+# Backend market-order precision constraints:
+# maker amount max 2 decimals, taker amount max 4 decimals.
+MARKET_ORDER_PRECISION = RoundConfig(price=0, size=2, amount=4)
+
+# Coarse fallback applied to all BUY limit orders:
+# maker amount max 2 decimals, taker amount max 4 decimals.
+BUY_LIMIT_ORDER_PRECISION = RoundConfig(price=0, size=4, amount=2)
+
+
 class OrderBuilder:
     def __init__(
         self,
@@ -57,6 +68,48 @@ class OrderBuilder:
         # Address which holds funds. Defaults to the signer address.
         # Used for Polymarket proxy wallets and other smart contract wallets.
         self.funder = funder if funder is not None else (self.signer.address() if self.signer else None)
+        self._exchange_order_builders = {}
+        self._warm_up_signer()
+
+    def _warm_up_signer(self) -> None:
+        if self.signer is not None:
+            self.signer.sign(_SIGNER_WARM_UP_HASH)
+
+    def _get_exchange_order_builder(self, version: int, neg_risk: bool):
+        neg_risk_key = bool(neg_risk)
+        builder_key = (version, neg_risk_key)
+        builder = self._exchange_order_builders.get(builder_key)
+        if builder is not None:
+            return builder
+
+        contract_config = get_contract_config(self.signer.get_chain_id())
+        if version == 1:
+            exchange_address = (
+                contract_config.neg_risk_exchange
+                if neg_risk_key
+                else contract_config.exchange
+            )
+            builder = ExchangeOrderBuilderV1(
+                exchange_address,
+                self.signer.get_chain_id(),
+                self.signer,
+            )
+        elif version == 2:
+            exchange_address = (
+                contract_config.neg_risk_exchange_v2
+                if neg_risk_key
+                else contract_config.exchange_v2
+            )
+            builder = ExchangeOrderBuilderV2(
+                exchange_address,
+                self.signer.get_chain_id(),
+                self.signer,
+            )
+        else:
+            raise ValueError(f"unsupported order version {version}")
+
+        self._exchange_order_builders[builder_key] = builder
+        return builder
 
     def get_order_amounts(
         self, side, size: float, price: float, round_config: RoundConfig
@@ -67,12 +120,11 @@ class OrderBuilder:
         raw_price = round_normal(price, round_config.price)
 
         if side == BUY:
-            raw_taker_amt = round_down(size, round_config.size)
-            raw_maker_amt = raw_taker_amt * raw_price
-            if decimal_places(raw_maker_amt) > round_config.amount:
-                raw_maker_amt = round_up(raw_maker_amt, round_config.amount + 4)
-                if decimal_places(raw_maker_amt) > round_config.amount:
-                    raw_maker_amt = round_down(raw_maker_amt, round_config.amount)
+            raw_taker_amt = round_down(size, BUY_LIMIT_ORDER_PRECISION.size)
+            raw_maker_amt = round_up(
+                raw_taker_amt * raw_price,
+                BUY_LIMIT_ORDER_PRECISION.amount,
+            )
 
             return Side.BUY, to_token_decimals(raw_maker_amt), to_token_decimals(raw_taker_amt)
 
@@ -98,23 +150,29 @@ class OrderBuilder:
         # V2 change: market orders use round_down for price (v1 used round_normal)
         raw_price = round_down(price, round_config.price)
 
+        market_precision = MARKET_ORDER_PRECISION
+
         if side == BUY:
-            raw_maker_amt = round_down(amount, round_config.size)
+            raw_maker_amt = round_down(amount, market_precision.size)
             raw_taker_amt = raw_maker_amt / raw_price
-            if decimal_places(raw_taker_amt) > round_config.amount:
-                raw_taker_amt = round_up(raw_taker_amt, round_config.amount + 4)
-                if decimal_places(raw_taker_amt) > round_config.amount:
-                    raw_taker_amt = round_down(raw_taker_amt, round_config.amount)
+            if decimal_places(raw_taker_amt) > market_precision.amount:
+                raw_taker_amt = round_up(raw_taker_amt, market_precision.amount + 4)
+                if decimal_places(raw_taker_amt) > market_precision.amount:
+                    raw_taker_amt = round_down(raw_taker_amt, market_precision.amount)
+            if raw_taker_amt == 0 and raw_maker_amt > 0:
+                raw_taker_amt = 1 / (10**market_precision.amount)
 
             return Side.BUY, to_token_decimals(raw_maker_amt), to_token_decimals(raw_taker_amt)
 
         elif side == SELL:
-            raw_maker_amt = round_down(amount, round_config.size)
+            raw_maker_amt = round_down(amount, market_precision.size)
             raw_taker_amt = raw_maker_amt * raw_price
-            if decimal_places(raw_taker_amt) > round_config.amount:
-                raw_taker_amt = round_up(raw_taker_amt, round_config.amount + 4)
-                if decimal_places(raw_taker_amt) > round_config.amount:
-                    raw_taker_amt = round_down(raw_taker_amt, round_config.amount)
+            if decimal_places(raw_taker_amt) > market_precision.amount:
+                raw_taker_amt = round_up(raw_taker_amt, market_precision.amount + 4)
+                if decimal_places(raw_taker_amt) > market_precision.amount:
+                    raw_taker_amt = round_down(raw_taker_amt, market_precision.amount)
+            if raw_taker_amt == 0 and raw_maker_amt > 0:
+                raw_taker_amt = 1 / (10**market_precision.amount)
 
             return Side.SELL, to_token_decimals(raw_maker_amt), to_token_decimals(raw_taker_amt)
 
@@ -141,18 +199,11 @@ class OrderBuilder:
             round_config,
         )
 
-        contract_config = get_contract_config(self.signer.get_chain_id())
         ts = str(time.time_ns() // 1_000_000)
 
         if version == 1:
             if self.signature_type == SignatureTypeV2.POLY_1271:
                 raise ValueError("signature type POLY_1271 is not supported for v1 orders")
-
-            exchange_address = (
-                contract_config.neg_risk_exchange
-                if options.neg_risk
-                else contract_config.exchange
-            )
             resolved_fee_rate_bps = (
                 fee_rate_bps if fee_rate_bps is not None
                 else getattr(order_args, "fee_rate_bps", 0)
@@ -170,17 +221,10 @@ class OrderBuilder:
                 expiration=str(order_args.expiration),
                 signatureType=SignatureTypeV1(int(self.signature_type)),
             )
-            builder = ExchangeOrderBuilderV1(
-                exchange_address, self.signer.get_chain_id(), self.signer
-            )
+            builder = self._get_exchange_order_builder(version, options.neg_risk)
             return builder.build_signed_order(order_data)
 
         elif version == 2:
-            exchange_address = (
-                contract_config.neg_risk_exchange_v2
-                if options.neg_risk
-                else contract_config.exchange_v2
-            )
             order_data = OrderDataV2(
                 maker=self.funder,
                 tokenId=order_args.token_id,
@@ -194,9 +238,7 @@ class OrderBuilder:
                 builder=order_args.builder_code,
                 expiration=str(getattr(order_args, "expiration", 0)),
             )
-            builder = ExchangeOrderBuilderV2(
-                exchange_address, self.signer.get_chain_id(), self.signer
-            )
+            builder = self._get_exchange_order_builder(version, options.neg_risk)
             return builder.build_signed_order(order_data)
 
         else:
@@ -222,18 +264,11 @@ class OrderBuilder:
             round_config,
         )
 
-        contract_config = get_contract_config(self.signer.get_chain_id())
         ts = str(time.time_ns() // 1_000_000)
 
         if version == 1:
             if self.signature_type == SignatureTypeV2.POLY_1271:
                 raise ValueError("signature type POLY_1271 is not supported for v1 orders")
-
-            exchange_address = (
-                contract_config.neg_risk_exchange
-                if options.neg_risk
-                else contract_config.exchange
-            )
             resolved_fee_rate_bps = (
                 fee_rate_bps if fee_rate_bps is not None
                 else getattr(order_args, "fee_rate_bps", 0)
@@ -251,17 +286,10 @@ class OrderBuilder:
                 expiration="0",
                 signatureType=SignatureTypeV1(int(self.signature_type)),
             )
-            builder = ExchangeOrderBuilderV1(
-                exchange_address, self.signer.get_chain_id(), self.signer
-            )
+            builder = self._get_exchange_order_builder(version, options.neg_risk)
             return builder.build_signed_order(order_data)
 
         elif version == 2:
-            exchange_address = (
-                contract_config.neg_risk_exchange_v2
-                if options.neg_risk
-                else contract_config.exchange_v2
-            )
             order_data = OrderDataV2(
                 maker=self.funder,
                 tokenId=order_args.token_id,
@@ -274,9 +302,7 @@ class OrderBuilder:
                 metadata=getattr(order_args, "metadata", BYTES32_ZERO),
                 builder=order_args.builder_code,
             )
-            builder = ExchangeOrderBuilderV2(
-                exchange_address, self.signer.get_chain_id(), self.signer
-            )
+            builder = self._get_exchange_order_builder(version, options.neg_risk)
             return builder.build_signed_order(order_data)
 
         else:
