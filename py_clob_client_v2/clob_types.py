@@ -262,6 +262,7 @@ class CreateOrderOptions:
 class PartialCreateOrderOptions:
     tick_size: Optional[TickSize] = None
     neg_risk: Optional[bool] = None
+    fee_rate_bps: Optional[int] = None
 
 
 @dataclass

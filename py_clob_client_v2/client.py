@@ -118,7 +118,6 @@ from .signer import Signer
 from .utilities import (
     adjust_market_buy_amount,
     generate_orderbook_summary_hash,
-    is_tick_size_smaller,
     price_valid,
 )
 from .order_utils.model.order_data_v1 import order_to_json_v1
@@ -703,8 +702,12 @@ class ClobClient:
         )
         version = self.__resolve_version()
 
-        user_fee_rate_bps = getattr(order_args, "fee_rate_bps", None) or None
-        fee_rate_bps = self.__resolve_fee_rate_bps(token_id, user_fee_rate_bps) if version == 1 else None
+        fee_rate_bps = self.__resolve_order_fee_rate_bps(
+            token_id,
+            order_args,
+            options,
+            version,
+        )
 
         return self.builder.build_order(
             order_args,
@@ -721,7 +724,6 @@ class ClobClient:
         self.assert_level_1_auth()
 
         token_id = order_args.token_id
-        self.__ensure_market_info_cached(token_id)
 
         tick_size = self.__resolve_tick_size(
             token_id, options.tick_size if options else None
@@ -748,6 +750,7 @@ class ClobClient:
         builder_code = getattr(order_args, "builder_code", BYTES32_ZERO)
 
         if (order_args.side == "BUY" or order_args.side == Side.BUY) and getattr(order_args, "user_usdc_balance", None):
+            self.__ensure_market_info_cached(token_id)
             self.__ensure_builder_fee_rate_cached(builder_code)
             builder_taker_fee_rate = (
                 self.__builder_fee_rates[builder_code].taker
@@ -771,8 +774,12 @@ class ClobClient:
         )
         version = self.__resolve_version()
 
-        user_fee_rate_bps = getattr(order_args, "fee_rate_bps", None) or None
-        fee_rate_bps = self.__resolve_fee_rate_bps(token_id, user_fee_rate_bps) if version == 1 else None
+        fee_rate_bps = self.__resolve_order_fee_rate_bps(
+            token_id,
+            order_args,
+            options,
+            version,
+        )
 
         return self.builder.build_market_order(
             order_args,
@@ -1016,14 +1023,9 @@ class ClobClient:
         return self._get(f"{self.host}{GET_MARKET_TRADES_EVENTS}{condition_id}")
 
     def __resolve_tick_size(self, token_id: str, tick_size: TickSize = None) -> TickSize:
-        min_tick_size = self.get_tick_size(token_id)
-        if tick_size:
-            if is_tick_size_smaller(tick_size, min_tick_size):
-                raise PolyException(
-                    f"invalid tick size ({tick_size}), minimum for the market is {min_tick_size}"
-                )
+        if tick_size is not None:
             return tick_size
-        return min_tick_size
+        return self.get_tick_size(token_id)
 
     def __resolve_fee_rate_bps(self, token_id: str, user_fee_rate_bps: int = None) -> int:
         market_fee_rate_bps = self.get_fee_rate_bps(token_id)
@@ -1037,6 +1039,20 @@ class ClobClient:
                 f"fee rate for the market must be {market_fee_rate_bps}"
             )
         return market_fee_rate_bps
+
+    def __resolve_order_fee_rate_bps(
+        self,
+        token_id: str,
+        order_args,
+        options: PartialCreateOrderOptions = None,
+        version: int = 2,
+    ) -> int:
+        if version != 1:
+            return None
+        if options and options.fee_rate_bps is not None:
+            return options.fee_rate_bps
+        user_fee_rate_bps = getattr(order_args, "fee_rate_bps", None) or None
+        return self.__resolve_fee_rate_bps(token_id, user_fee_rate_bps)
 
     def __resolve_version(self, force_update: bool = False) -> int:
         if not force_update and self.__cached_version is not None:
