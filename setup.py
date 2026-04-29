@@ -21,6 +21,7 @@ setuptools.setup(
         "poly_eip712_structs>=0.0.1",
         "py-order-utils>=0.3.2",
         "httpx[http2]>=0.27.0",
+        "coincurve>=21.0.0",
     ],
     project_urls={
         "Bug Tracker": "https://github.com/Polymarket/py-clob-client-v2/issues",

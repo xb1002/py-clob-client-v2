@@ -7,3 +7,4 @@ pytest==8.2.2
 python-dotenv==0.19.2
 py-builder-signing-sdk==0.0.2
 httpx[http2]==0.27.0
+coincurve==21.0.0

@@ -1,6 +1,5 @@
 import dataclasses
 import time
-from eth_account import Account
 from eth_account.messages import encode_typed_data
 from eth_utils import keccak as _keccak
 
@@ -104,8 +103,7 @@ class ExchangeOrderBuilderV2:
 
     def build_order_signature(self, typed_data: dict) -> str:
         encoded = encode_typed_data(full_message=typed_data)
-        signed = Account.sign_message(encoded, private_key=self.signer.private_key)
-        return "0x" + signed.signature.hex()
+        return "0x" + self.signer.sign(_hash_message(encoded))
 
     def build_order_hash(self, typed_data: dict) -> str:
         encoded = encode_typed_data(full_message=typed_data)
