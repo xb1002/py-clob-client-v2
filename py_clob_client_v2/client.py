@@ -142,6 +142,7 @@ class ClobClient:
         builder_config: BuilderConfig = None,
         use_server_time: bool = False,
         retry_on_error: bool = False,
+        preload_order_version: bool = True,
     ):
         self.host = host.rstrip("/")
         self.chain_id = chain_id
@@ -167,6 +168,8 @@ class ClobClient:
         self.__builder_fee_rates: dict = {}
         self.__token_condition_map: dict = {}
         self.__cached_version: Optional[int] = None
+        if preload_order_version:
+            self.__resolve_version()
 
         self.rfq = RfqClient(self)
 

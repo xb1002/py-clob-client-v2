@@ -12,7 +12,7 @@ CONDITION_ID = "0xdeadbeef"
 
 
 def _make_client() -> ClobClient:
-    return ClobClient(host=HOST, chain_id=CHAIN_ID)
+    return ClobClient(host=HOST, chain_id=CHAIN_ID, preload_order_version=False)
 
 
 def _inject_market_info(client: ClobClient, token_id: str, rate: float, exponent: float):

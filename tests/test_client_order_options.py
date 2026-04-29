@@ -19,7 +19,12 @@ PRIVATE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff8
 
 class TestClientOrderOptions(TestCase):
     def _make_v1_client(self) -> ClobClient:
-        client = ClobClient(host=HOST, chain_id=AMOY, key=PRIVATE_KEY)
+        client = ClobClient(
+            host=HOST,
+            chain_id=AMOY,
+            key=PRIVATE_KEY,
+            preload_order_version=False,
+        )
         client._ClobClient__cached_version = 1
         return client
 
@@ -68,3 +73,35 @@ class TestClientOrderOptions(TestCase):
         self.assertEqual(mock_build.call_args.args[1], CreateOrderOptions("0.01", False))
         self.assertEqual(mock_build.call_args.kwargs["version"], 1)
         self.assertEqual(mock_build.call_args.kwargs["fee_rate_bps"], 321)
+
+
+class TestClientVersionPreload(TestCase):
+    def test_fetches_version_on_init_by_default(self):
+        with patch("py_clob_client_v2.client.get", return_value={"version": 1}) as mock_get:
+            client = ClobClient(host=HOST, chain_id=AMOY, key=PRIVATE_KEY)
+
+        mock_get.assert_called_once_with(f"{HOST}/version", headers=None, params=None)
+        self.assertEqual(client._ClobClient__resolve_version(), 1)
+
+    def test_can_skip_version_preload_on_init(self):
+        with patch("py_clob_client_v2.client.get") as mock_get:
+            ClobClient(
+                host=HOST,
+                chain_id=AMOY,
+                key=PRIVATE_KEY,
+                preload_order_version=False,
+            )
+
+        mock_get.assert_not_called()
+
+    def test_can_explicitly_preload_order_version_on_init(self):
+        with patch("py_clob_client_v2.client.get", return_value={"version": 1}) as mock_get:
+            client = ClobClient(
+                host=HOST,
+                chain_id=AMOY,
+                key=PRIVATE_KEY,
+                preload_order_version=True,
+            )
+
+        mock_get.assert_called_once_with(f"{HOST}/version", headers=None, params=None)
+        self.assertEqual(client._ClobClient__resolve_version(), 1)
