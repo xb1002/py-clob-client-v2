@@ -1,3 +1,4 @@
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 import time
 from typing import Union
 
@@ -49,6 +50,31 @@ MARKET_ORDER_PRECISION = RoundConfig(price=0, size=2, amount=4)
 # Coarse fallback applied to all BUY limit orders:
 # maker amount max 2 decimals, taker amount max 4 decimals.
 BUY_LIMIT_ORDER_PRECISION = RoundConfig(price=0, size=4, amount=2)
+TOKEN_DECIMALS = Decimal("1000000")
+
+
+def _decimal_quantizer(sig_digits: int) -> Decimal:
+    return Decimal("1").scaleb(-sig_digits)
+
+
+def _to_decimal(value) -> Decimal:
+    return value if isinstance(value, Decimal) else Decimal(str(value))
+
+
+def _round_down_decimal(value, sig_digits: int) -> Decimal:
+    return _to_decimal(value).quantize(
+        _decimal_quantizer(sig_digits), rounding=ROUND_FLOOR
+    )
+
+
+def _round_up_decimal(value, sig_digits: int) -> Decimal:
+    return _to_decimal(value).quantize(
+        _decimal_quantizer(sig_digits), rounding=ROUND_CEILING
+    )
+
+
+def _to_token_decimals_decimal(value: Decimal) -> int:
+    return int(value * TOKEN_DECIMALS)
 
 
 class OrderBuilder:
@@ -120,13 +146,17 @@ class OrderBuilder:
         raw_price = round_normal(price, round_config.price)
 
         if side == BUY:
-            raw_taker_amt = round_down(size, BUY_LIMIT_ORDER_PRECISION.size)
-            raw_maker_amt = round_up(
-                raw_taker_amt * raw_price,
+            raw_taker_amt = _round_down_decimal(size, BUY_LIMIT_ORDER_PRECISION.size)
+            raw_maker_amt = _round_up_decimal(
+                raw_taker_amt * _to_decimal(raw_price),
                 BUY_LIMIT_ORDER_PRECISION.amount,
             )
 
-            return Side.BUY, to_token_decimals(raw_maker_amt), to_token_decimals(raw_taker_amt)
+            return (
+                Side.BUY,
+                _to_token_decimals_decimal(raw_maker_amt),
+                _to_token_decimals_decimal(raw_taker_amt),
+            )
 
         elif side == SELL:
             raw_maker_amt = round_down(size, round_config.size)

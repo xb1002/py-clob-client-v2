@@ -355,6 +355,24 @@ class TestOrderBuilder(TestCase):
                 price = round_normal(price + delta_price, 2)
             size = round_normal(size + delta_size, 2)
 
+    def test_get_order_amounts_buy_0_01_exact_cent_products_do_not_overround(self):
+        builder = OrderBuilder(signer)
+
+        for price, expected_maker in [
+            (0.39, 1_950_000),
+            (0.92, 4_600_000),
+            (0.93, 4_650_000),
+        ]:
+            with self.subTest(price=price):
+                side, maker, taker = builder.get_order_amounts(
+                    BUY, 5, price, ROUNDING_CONFIG["0.01"]
+                )
+
+                self.assertEqual(side, Side.BUY)
+                self.assertEqual(maker, expected_maker)
+                self.assertEqual(taker, 5_000_000)
+                self.assertAlmostEqual(maker / taker, price)
+
     def test_get_order_amounts_buy_0_001(self):
         builder = OrderBuilder(signer)
         delta_price = 0.001
